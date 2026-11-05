@@ -602,6 +602,7 @@ public final class TemplateSettings implements PersistentStateComponent<Template
         LOG.error(new PluginException(e, pluginId == null ? null : PluginId.getId(pluginId)));
       }
     }
+    ApplicationManager.getApplication().getService(LiveTemplateDescriptionPreloader.class).preload(List.copyOf(myDefaultTemplates.values()));
   }
 
   private void applyDefTemplate(@NotNull ParsedDefaultTemplateGroup parsed) {
