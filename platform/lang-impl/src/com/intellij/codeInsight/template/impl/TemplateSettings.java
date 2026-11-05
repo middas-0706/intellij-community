@@ -53,8 +53,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.MissingResourceException;
 import java.util.Objects;
-import java.util.ResourceBundle;
 
 import static com.intellij.codeInsight.template.impl.TemplateContext.contextsEqual;
 import static com.intellij.diagnostic.ControlFlowExceptionsKt.rethrowControlFlowException;
@@ -764,20 +764,25 @@ public final class TemplateSettings implements PersistentStateComponent<Template
                                                      @NotNull LiveTemplateContextService ltContextService) {
     String name = element.getAttributeValue(NAME);
     String value = element.getAttributeValue(VALUE);
-    String description;
     String resourceBundle = element.getAttributeValue(RESOURCE_BUNDLE);
     String key = element.getAttributeValue(KEY);
     String id = element.getAttributeValue(ID);
-    if (resourceBundle != null && key != null) {
-      ResourceBundle bundle = DynamicBundle.getResourceBundle(classLoader, resourceBundle);
-      description = bundle.getString(key);
-    }
-    else {
-      description = element.getAttributeValue(DESCRIPTION); //NON-NLS
-    }
+    boolean isBundleDescription = resourceBundle != null && key != null;
+    String description = isBundleDescription ? null : element.getAttributeValue(DESCRIPTION); //NON-NLS
 
     String shortcut = element.getAttributeValue(SHORTCUT);
     TemplateImpl template = createTemplate(name, value, groupName, description, shortcut, id);
+    if (isBundleDescription) {
+      template.setLazyDescription(() -> {
+        try {
+          return DynamicBundle.getResourceBundle(classLoader, resourceBundle).getString(key);
+        }
+        catch (MissingResourceException e) {
+          LOG.warn("Cannot find the description of template " + name + " in resource bundle " + resourceBundle, e);
+          return null;
+        }
+      });
+    }
 
     template.setToReformat(Boolean.parseBoolean(element.getAttributeValue(TO_REFORMAT)));
     template.setToShortenLongNames(Boolean.parseBoolean(element.getAttributeValue(TO_SHORTEN_FQ_NAMES)));

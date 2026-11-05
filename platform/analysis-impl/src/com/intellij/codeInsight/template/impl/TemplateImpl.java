@@ -44,11 +44,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class TemplateImpl extends TemplateBase implements SchemeElement {
   private @NlsSafe String myKey;
   private @NlsContexts.DetailedDescription String myDescription;
+  private volatile @Nullable Supplier<@NlsContexts.DetailedDescription String> myDescriptionSupplier;
   private String myGroupName;
   private char myShortcutChar = TemplateConstants.DEFAULT_CHAR;
   private final List<Variable> myVariables = new SmartList<>();
@@ -64,7 +66,7 @@ public class TemplateImpl extends TemplateBase implements SchemeElement {
     if (isToReformat != template.isToReformat) return false;
     if (isToShortenLongNames != template.isToShortenLongNames) return false;
     if (myShortcutChar != template.myShortcutChar) return false;
-    return Objects.equals(myDescription, template.myDescription) &&
+    return Objects.equals(getDescription(), template.getDescription()) &&
            Objects.equals(myGroupName, template.myGroupName) &&
            Objects.equals(myKey, template.myKey) &&
            string().equals(template.string()) &&
@@ -204,7 +206,9 @@ public class TemplateImpl extends TemplateBase implements SchemeElement {
     setTemplateText(another.templateText());
     myGroupName = another.myGroupName;
     myId = another.myId;
+    Supplier<@NlsContexts.DetailedDescription String> descriptionSupplier = another.myDescriptionSupplier;
     myDescription = another.myDescription;
+    myDescriptionSupplier = descriptionSupplier;
     myShortcutChar = another.myShortcutChar;
     isToReformat = another.isToReformat;
     isToShortenLongNames = another.isToShortenLongNames;
@@ -327,14 +331,26 @@ public class TemplateImpl extends TemplateBase implements SchemeElement {
 
   @Override
   public @NlsContexts.DetailedDescription String getDescription() {
+    Supplier<@NlsContexts.DetailedDescription String> supplier = myDescriptionSupplier;
+    if (supplier != null) {
+      setDescription(supplier.get());
+    }
     return myDescription;
   }
 
   public void setDescription(@NlsContexts.DetailedDescription @Nullable String value) {
-    value = StringUtil.notNullize(value).trim();
-    if (!StringUtil.equals(value, myDescription)) {
-      myDescription = value;
-    }
+    myDescription = StringUtil.notNullize(value).trim();
+    myDescriptionSupplier = null;
+  }
+
+  /**
+   * Sets a description that {@code supplier} computes on the first call of {@link #getDescription()}.
+   * Use it when the description comes from a resource bundle, so that the bundle loads only when some code reads the description.
+   */
+  @ApiStatus.Internal
+  public void setLazyDescription(@NotNull Supplier<@NlsContexts.DetailedDescription String> supplier) {
+    myDescription = null;
+    myDescriptionSupplier = supplier;
   }
 
   public char getShortcutChar() {
