@@ -53,7 +53,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.MissingResourceException;
 import java.util.Objects;
 
 import static com.intellij.codeInsight.template.impl.TemplateContext.contextsEqual;
@@ -774,15 +773,7 @@ public final class TemplateSettings implements PersistentStateComponent<Template
     String shortcut = element.getAttributeValue(SHORTCUT);
     TemplateImpl template = createTemplate(name, value, groupName, description, shortcut, id);
     if (isBundleDescription) {
-      template.setLazyDescription(() -> {
-        try {
-          return DynamicBundle.getResourceBundle(classLoader, resourceBundle).getString(key);
-        }
-        catch (MissingResourceException e) {
-          LOG.warn("Cannot find the description of template " + name + " in resource bundle " + resourceBundle, e);
-          return null;
-        }
-      });
+      template.setLazyDescription(() -> DynamicBundle.getResourceBundle(classLoader, resourceBundle).getString(key));
     }
 
     template.setToReformat(Boolean.parseBoolean(element.getAttributeValue(TO_REFORMAT)));

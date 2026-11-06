@@ -11,6 +11,8 @@ import com.intellij.codeInsight.template.TextResult;
 import com.intellij.modcommand.ModCommand;
 import com.intellij.modcommand.ModPsiUpdater;
 import com.intellij.modcommand.ModTemplateBuilder;
+import com.intellij.openapi.diagnostic.ControlFlowException;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.RangeMarker;
@@ -43,11 +45,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public class TemplateImpl extends TemplateBase implements SchemeElement {
+  private static final Logger LOG = Logger.getInstance(TemplateImpl.class);
+
   private @NlsSafe String myKey;
   private @NlsContexts.DetailedDescription String myDescription;
   private volatile @Nullable Supplier<@NlsContexts.DetailedDescription String> myDescriptionSupplier;
@@ -333,9 +338,25 @@ public class TemplateImpl extends TemplateBase implements SchemeElement {
   public @NlsContexts.DetailedDescription String getDescription() {
     Supplier<@NlsContexts.DetailedDescription String> supplier = myDescriptionSupplier;
     if (supplier != null) {
-      setDescription(supplier.get());
+      resolveDescription(supplier);
     }
     return myDescription;
+  }
+
+  private void resolveDescription(@NotNull Supplier<@NlsContexts.DetailedDescription String> supplier) {
+    try {
+      setDescription(supplier.get());
+    }
+    catch (Throwable e) {
+      if (e instanceof ControlFlowException || e instanceof CancellationException) {
+        throw e;
+      }
+      setDescription(null);
+      if (e instanceof Error) {
+        throw e;
+      }
+      LOG.warn("Cannot read the description of template " + myKey + " in group " + myGroupName, e);
+    }
   }
 
   public void setDescription(@NlsContexts.DetailedDescription @Nullable String value) {
