@@ -11,6 +11,7 @@ import com.intellij.diagnostic.PluginException;
 import com.intellij.ide.plugins.cl.PluginAwareClassLoader;
 import com.intellij.internal.statistic.utils.PluginInfo;
 import com.intellij.internal.statistic.utils.PluginInfoDetectorKt;
+import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.SettingsCategory;
@@ -566,6 +567,17 @@ public final class TemplateSettings implements PersistentStateComponent<Template
     return result;
   }
 
+  private void preloadDescriptions() {
+    Application app = ApplicationManager.getApplication();
+    if (app.isHeadlessEnvironment() || app.isDisposed()) {
+      return;
+    }
+    LiveTemplateDescriptionPreloader preloader = app.getService(LiveTemplateDescriptionPreloader.class);
+    if (preloader != null) {
+      preloader.preload(List.copyOf(myDefaultTemplates.values()));
+    }
+  }
+
   private static void parseDefaultLiveTemplatesOfProvider(@NotNull DefaultLiveTemplatesProvider provider,
                                                           @NotNull List<ParsedDefaultTemplateGroup> result) throws JDOMException {
     for (String defTemplate : provider.getDefaultLiveTemplateFiles()) {
@@ -605,7 +617,7 @@ public final class TemplateSettings implements PersistentStateComponent<Template
         LOG.error(new PluginException(e, pluginId == null ? null : PluginId.getId(pluginId)));
       }
     }
-    ApplicationManager.getApplication().getService(LiveTemplateDescriptionPreloader.class).preload(List.copyOf(myDefaultTemplates.values()));
+    preloadDescriptions();
   }
 
   private void applyDefTemplate(@NotNull ParsedDefaultTemplateGroup parsed) {

@@ -1,7 +1,6 @@
 // Copyright 2000-2026 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license.
 package com.intellij.codeInsight.template.impl
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.ControlFlowException
 import com.intellij.openapi.diagnostic.logger
@@ -26,9 +25,6 @@ internal class LiveTemplateDescriptionPreloader(private val coroutineScope: Coro
    */
   @Synchronized
   fun preload(templates: List<TemplateImpl>) {
-    if (ApplicationManager.getApplication().isHeadlessEnvironment) {
-      return
-    }
     job?.cancel()
     job = coroutineScope.launch(Dispatchers.IO) {
       for (template in templates) {
