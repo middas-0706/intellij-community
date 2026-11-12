@@ -22,6 +22,7 @@ org/cef/handler/CefKeyboardHandler
 org/cef/handler/CefLifeSpanHandler
 org/cef/handler/CefLoadHandler
 org/cef/handler/CefLoadHandler$ErrorCode
+org/cef/handler/CefMessageRouterHandler
 org/cef/handler/CefPermissionHandler
 org/cef/handler/CefRenderHandler
 org/cef/handler/CefRequestHandler

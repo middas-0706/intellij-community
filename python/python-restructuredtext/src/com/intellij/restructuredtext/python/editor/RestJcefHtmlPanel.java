@@ -7,7 +7,6 @@ import com.intellij.ide.ui.LafManagerListener;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
-import com.intellij.ui.jcef.JBCefBrowserBase;
 import com.intellij.ui.jcef.JBCefJSQuery;
 import com.intellij.ui.jcef.JCEFHtmlPanel;
 import com.intellij.util.ui.UIUtil;
@@ -61,7 +60,7 @@ public final class RestJcefHtmlPanel extends JCEFHtmlPanel implements RestPrevie
 
   private static final EnumMap<Style, String> ourLoadedStylesCache = new EnumMap<>(Style.class);
 
-  private final JBCefJSQuery myJSQueryOpenInBrowser = JBCefJSQuery.create((JBCefBrowserBase)this);
+  private final JBCefJSQuery myJSQueryOpenInBrowser = JBCefJSQuery.create(this, JBCefJSQuery.FramePolicy.mainFrameOf("file://"));
 
   private static final @Nullable String ourJSCodeToInject;
 

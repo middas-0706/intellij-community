@@ -11,6 +11,8 @@ import com.intellij.openapi.extensions.PluginId;
 import com.intellij.openapi.fileEditor.impl.HTMLEditorProvider;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.ex.WelcomeScreenProjectProvider;
+import com.intellij.platform.ide.customization.ExternalProductResourceUrls;
+import com.intellij.platform.ide.impl.customization.BaseJetBrainsExternalProductResourceUrls;
 import com.intellij.ui.ExperimentalUI;
 import com.intellij.ui.jcef.JBCefApp;
 import com.intellij.util.Urls;
@@ -19,10 +21,15 @@ import com.intellij.util.system.OS;
 import com.intellij.util.ui.StartupUiUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.VisibleForTesting;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -63,7 +70,10 @@ final class JcefWhatsNewPageProvider implements WhatsNewPageProvider {
       LOG.error(e);
     }
 
-    request.withQueryHandler(queryHandler);
+    // The page can redirect to the web site, for example from a short link.
+    var urls = ExternalProductResourceUrls.getInstance();
+    var webSiteUrl = urls instanceof BaseJetBrainsExternalProductResourceUrls jetBrainsUrls ? jetBrainsUrls.getBaseWebSiteUrl().toExternalForm() : null;
+    setQueryHandler(request, queryHandler, trustedOrigins(url, webSiteUrl));
 
     // The page shows the IJ Air block only for the `code` parameter.
     if (parameters.containsKey("code")) {
@@ -75,6 +85,49 @@ final class JcefWhatsNewPageProvider implements WhatsNewPageProvider {
     HTMLEditorProvider.openEditorWithoutBlocking(project, title, request);
 
     WhatsNewUsagesCollector.pageDisplayed(project);
+  }
+
+  /**
+   * Sets the query handler of the request for the pages of the origins. Without an origin the request gets no handler,
+   * because a URL request without trusted origins lets the main frame of any origin call it.
+   */
+  @VisibleForTesting
+  static void setQueryHandler(@NotNull HTMLEditorProvider.Request request,
+                              @Nullable HTMLEditorProvider.JsQueryHandler queryHandler,
+                              @NotNull List<String> origins) {
+    if (queryHandler == null) return;
+    if (origins.isEmpty()) {
+      LOG.warn("The What's New page has no trusted origin, so it gets no query handler");
+      return;
+    }
+    request.withQueryHandler(queryHandler).withTrustedOrigins(origins.toArray(String[]::new));
+  }
+
+  /**
+   * Returns the origins whose pages can call the query handler: the origin of the URL of the page and of the web site.
+   */
+  @VisibleForTesting
+  static @NotNull List<String> trustedOrigins(@NotNull String url, @Nullable String webSiteUrl) {
+    var origins = new LinkedHashSet<String>();
+    for (String it : webSiteUrl == null ? List.of(url) : List.of(url, webSiteUrl)) {
+      String origin = originOf(it);
+      if (origin != null) origins.add(origin);
+    }
+    return List.copyOf(origins);
+  }
+
+  private static @Nullable String originOf(@NotNull String url) {
+    try {
+      URI uri = new URI(url);
+      if (uri.getScheme() == null || uri.getHost() == null) return null;
+      String origin = uri.getScheme().toLowerCase(Locale.ROOT) + "://" + uri.getHost().toLowerCase(Locale.ROOT) +
+                      (uri.getPort() < 0 ? "" : ":" + uri.getPort());
+      if (HTMLEditorProvider.Request.isTrustedOrigin(origin)) return origin;
+    }
+    catch (URISyntaxException ignored) {
+    }
+    LOG.warn("Cannot get the origin of " + url);
+    return null;
   }
 
   private static Map<String, String> getRequestParameters(boolean includePlatformData, Project project) {

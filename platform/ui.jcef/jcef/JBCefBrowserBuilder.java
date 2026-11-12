@@ -33,12 +33,24 @@ public class JBCefBrowserBuilder {
 
   @ApiStatus.Internal
   boolean isClipboardBridgeUsed() {
-    return myUseClipboardBridge != null ?
-           myUseClipboardBridge :
-           myIsOffScreenRendering && isClipboardBridgeEnabledByDefault();
+    return myUseClipboardBridge != null ? myUseClipboardBridge : isClipboardBridgeUsedByDefault(myIsOffScreenRendering);
   }
 
+  /**
+   * Returns whether a browser uses the clipboard bridge when its builder does not call {@link #setUseClipboardBridge(boolean)}.
+   * <p>
+   * An off-screen browser on Linux uses it with the Wayland Ozone platform, and with the X11 Ozone platform in a KDE
+   * session on Wayland. The system property {@code ide.browser.jcef.linux.clipboard.bridge} overrides this.
+   * An embedder that turns the bridge off and handles the clipboard of its browsers itself can use it for the same
+   * decision.
+   *
+   * @param isOffScreenRendering whether the browser is rendered off-screen
+   */
   @ApiStatus.Internal
+  public static boolean isClipboardBridgeUsedByDefault(boolean isOffScreenRendering) {
+    return isOffScreenRendering && isClipboardBridgeEnabledByDefault();
+  }
+
   private static boolean isClipboardBridgeEnabledByDefault() {
     if (!SystemInfoRt.isLinux) return false;
 

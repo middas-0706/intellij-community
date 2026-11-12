@@ -87,15 +87,28 @@ c:com.intellij.ui.jcef.JBCefDefaultNativeBundleProvider
 - isAvailable():Z
 f:com.intellij.ui.jcef.JBCefJSQuery
 - com.intellij.ui.jcef.JBCefDisposable
+- sf:ERR_CODE_FRAME_REFUSED:I
+- addHandler(com.intellij.ui.jcef.JBCefJSQuery$FrameHandler):V
 - addHandler(java.util.function.Function):V
 - clearHandlers():V
 - s:create(com.intellij.ui.jcef.JBCefBrowser):com.intellij.ui.jcef.JBCefJSQuery
 - s:create(com.intellij.ui.jcef.JBCefBrowserBase):com.intellij.ui.jcef.JBCefJSQuery
+- s:create(com.intellij.ui.jcef.JBCefBrowserBase,com.intellij.ui.jcef.JBCefJSQuery$FramePolicy):com.intellij.ui.jcef.JBCefJSQuery
 - dispose():V
 - getFuncName():java.lang.String
 - inject(java.lang.String):java.lang.String
 - isDisposed():Z
+- removeHandler(com.intellij.ui.jcef.JBCefJSQuery$FrameHandler):V
 - removeHandler(java.util.function.Function):V
+com.intellij.ui.jcef.JBCefJSQuery$FrameHandler
+- a:handle(org.cef.browser.CefBrowser,org.cef.browser.CefFrame,java.lang.String):com.intellij.ui.jcef.JBCefJSQuery$Response
+f:com.intellij.ui.jcef.JBCefJSQuery$FramePolicy
+- allows(org.cef.browser.CefBrowser,org.cef.browser.CefBrowser,org.cef.browser.CefFrame):Z
+- s:anyFrame():com.intellij.ui.jcef.JBCefJSQuery$FramePolicy
+- guard(com.intellij.ui.jcef.JBCefBrowserBase,org.cef.handler.CefMessageRouterHandler):org.cef.handler.CefMessageRouterHandler
+- guard(org.cef.browser.CefBrowser,org.cef.handler.CefMessageRouterHandler):org.cef.handler.CefMessageRouterHandler
+- s:mainFrame():com.intellij.ui.jcef.JBCefJSQuery$FramePolicy
+- s:mainFrameOf(java.lang.String[]):com.intellij.ui.jcef.JBCefJSQuery$FramePolicy
 c:com.intellij.ui.jcef.JBCefJSQuery$Response
 - <init>(java.lang.String):V
 - errCode():I

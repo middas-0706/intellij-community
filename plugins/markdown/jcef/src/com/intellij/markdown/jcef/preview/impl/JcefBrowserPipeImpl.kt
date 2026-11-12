@@ -14,6 +14,7 @@ import tools.jackson.core.JacksonException
 import tools.jackson.module.kotlin.jacksonObjectMapper
 import tools.jackson.module.kotlin.readValue
 import java.io.IOException
+import java.net.URI
 
 /**
  * You can check resource/org/intellij/plugins/markdown/ui/preview/jcef/BrowserPipe.js
@@ -22,12 +23,13 @@ import java.io.IOException
  * @param browser Browser to use this pipe with.
  * @param injectionAllowedUrls A list of safe URLs which are allowed to receive injection with [BrowserPipe] API.
  * All URLs are considered to be safe for injection if this parameter is null.
+ * With the list, the pipe accepts only the messages of a main frame on the origin of a listed URL.
  */
 internal class JcefBrowserPipeImpl(
   browser: JBCefBrowserBase,
   private val injectionAllowedUrls: List<String>? = null,
 ) : BrowserPipe {
-  private var queryInstance: JBCefJSQuery? = checkNotNull(JBCefJSQuery.create(browser))
+  private var queryInstance: JBCefJSQuery? = checkNotNull(JBCefJSQuery.create(browser, framePolicy(injectionAllowedUrls)))
   private val query
     get() = checkNotNull(queryInstance) { "JS query instance should not be accessed after disposal" }
 
@@ -124,6 +126,12 @@ internal class JcefBrowserPipeImpl(
 
     private fun postToBrowserFunctionCall(data: String): String {
       return "window.__IntelliJTools.messagePipe.callBrowserListeners($data);"
+    }
+
+    private fun framePolicy(injectionAllowedUrls: List<String>?): JBCefJSQuery.FramePolicy {
+      if (injectionAllowedUrls.isNullOrEmpty()) return JBCefJSQuery.FramePolicy.mainFrame()
+      val origins = injectionAllowedUrls.map { url -> URI(url).let { "${it.scheme}://${it.rawAuthority}" } }
+      return JBCefJSQuery.FramePolicy.mainFrameOf(*origins.toTypedArray())
     }
 
     private const val ourBrowserNamespace = "__IntelliJTools"

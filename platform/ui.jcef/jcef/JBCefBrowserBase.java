@@ -63,6 +63,7 @@ import java.awt.KeyboardFocusManager;
 import java.awt.Point;
 import java.awt.Toolkit;
 import java.awt.Window;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.beans.PropertyChangeListener;
@@ -612,6 +613,43 @@ public abstract class JBCefBrowserBase implements JBCefDisposable {
   @ApiStatus.Internal
   @Nullable JBCefClipboardBridge getClipboardBridge() {
     return myClipboardBridge;
+  }
+
+  /**
+   * Declares that the owner of this browser sends the input of the user to the native browser itself, for example with
+   * {@link CefBrowser#sendMouseEvent} and {@link CefBrowser#sendKeyEvent}, and passes each event to
+   * {@link #notifyUserInput}. Call it before the page loads. An owner that passes key events also calls
+   * {@link #notifyUserInputFocusLost()} when its component loses the focus. A browser without a component that does not
+   * declare it has no source of user input, so its clipboard bridge takes a copy of the main frame at any time.
+   *
+   * @see JBCefBrowserBuilder#setUseClipboardBridge(boolean)
+   */
+  @ApiStatus.Internal
+  public final void setUserInputForwarded() {
+    JBCefClipboardBridge bridge = myClipboardBridge;
+    if (bridge != null) bridge.setUserInputForwarded();
+  }
+
+  /**
+   * Passes an input event to the clipboard bridge of this browser, when the owner sends the input of the user to the
+   * native browser itself, see {@link #setUserInputForwarded()}. Call it for each mouse and key event that the owner
+   * sends, before it sends the event. A browser whose UI component sends the input, such as an off-screen
+   * {@link JBCefBrowser}, does not need it.
+   */
+  @ApiStatus.Internal
+  public final void notifyUserInput(@NotNull InputEvent event) {
+    JBCefClipboardBridge bridge = myClipboardBridge;
+    if (bridge != null) bridge.onUserInput(event);
+  }
+
+  /**
+   * Tells the clipboard bridge of this browser that the component of the owner, whose input the owner passes to
+   * {@link #notifyUserInput}, lost the focus, so the releases of the keys that are down go to another component.
+   */
+  @ApiStatus.Internal
+  public final void notifyUserInputFocusLost() {
+    JBCefClipboardBridge bridge = myClipboardBridge;
+    if (bridge != null) bridge.onUserInputFocusLost();
   }
 
   @VisibleForTesting

@@ -21,6 +21,9 @@ import org.jetbrains.annotations.TestOnly
 import java.io.InputStream
 import java.net.URI
 
+// The labels of an ASCII host name are 1 to 63 characters long.
+private val TRUSTED_ORIGIN = Regex("""[a-z][a-z0-9+.-]*://(?:[a-z0-9-]{1,63}(?:\.[a-z0-9-]{1,63})*|\[[0-9a-f:.]+])(?::(\d{1,5}))?/?""")
+
 @Suppress("DEPRECATION")
 class HTMLEditorProvider : FileEditorProvider, DumbAware {
   companion object {
@@ -130,6 +133,9 @@ class HTMLEditorProvider : FileEditorProvider, DumbAware {
     var requestHandler: ResourceHandler? = null
       private set
     @ApiStatus.Internal
+    var trustedOrigins: List<String> = emptyList()
+      private set
+    @ApiStatus.Internal
     var onUrlChanged: (String?, String) -> Unit = { _, _ -> }
       private set
 
@@ -149,6 +155,18 @@ class HTMLEditorProvider : FileEditorProvider, DumbAware {
 
       @JvmStatic
       fun url(url: String): Request = Request(html = null, url = url)
+
+      /**
+       * Returns whether the text is an origin that [withTrustedOrigins] takes: a lowercase scheme and an ASCII host
+       * name or an IPv6 address in brackets, with an optional port and an optional `/` at the end.
+       */
+      @ApiStatus.Internal
+      @JvmStatic
+      fun isTrustedOrigin(text: String): Boolean {
+        val match = TRUSTED_ORIGIN.matchEntire(text) ?: return false
+        val port = match.groups[1]?.value ?: return true
+        return port.toInt() <= 65535
+      }
     }
 
     fun withTimeoutHtml(timeoutHtml: String?): Request {
@@ -158,6 +176,21 @@ class HTMLEditorProvider : FileEditorProvider, DumbAware {
 
     fun withQueryHandler(queryHandler: JsQueryHandler?): Request {
       this.queryHandler = queryHandler
+      return this
+    }
+
+    /**
+     * Sets the origins whose pages can call the query handler of a URL request, such as `https://example.com`.
+     * Without them, the main frame of the page can call it on any origin.
+     *
+     * @throws IllegalArgumentException if an item is not an origin, see [isTrustedOrigin]
+     */
+    @ApiStatus.Internal
+    fun withTrustedOrigins(vararg origins: String): Request {
+      for (origin in origins) {
+        require(isTrustedOrigin(origin)) { "not an origin: $origin" }
+      }
+      trustedOrigins = origins.toList()
       return this
     }
 

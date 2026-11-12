@@ -120,7 +120,7 @@ public class JBCefBrowser extends JBCefBrowserBase {
     }, myCefBrowser);
 
     if (isOffScreenRendering()) {
-      CefContextMenuRunner contextMenuRunner = new CefContextMenuRunner();
+      CefContextMenuRunner contextMenuRunner = new CefContextMenuRunner(getClipboardBridge());
       myCefClient.addContextMenuHandler(contextMenuRunner, myCefBrowser);
 
       myCefBrowser.getUIComponent().addFocusListener(new FocusAdapter() {

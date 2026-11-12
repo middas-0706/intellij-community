@@ -13,9 +13,12 @@ import org.cef.handler.CefLoadHandlerAdapter
 import org.cef.network.CefRequest
 import org.intellij.lang.annotations.Language
 import org.jetbrains.annotations.ApiStatus
+import org.jetbrains.annotations.TestOnly
+import java.awt.KeyboardFocusManager
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
 import java.awt.datatransfer.UnsupportedFlavorException
+import java.awt.event.InputEvent
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 
@@ -23,7 +26,7 @@ private val LOG = logger<JBCefClipboardBridge>()
 
 private const val COPY_PREFIX = "copy:"
 private const val ERROR_PREFIX = "error:"
-private const val PASTE_REQUEST = "paste"
+private const val PASTE_PREFIX = "paste:"
 
 /**
  * Routes the clipboard traffic of an off-screen browser through the IDE process.
@@ -33,14 +36,32 @@ private const val PASTE_REQUEST = "paste"
  *
  * For pages without a secure context, paste uses a synthetic event. The browser builder selects the default based on
  * the Ozone platform and desktop environment. The system property `ide.browser.jcef.linux.clipboard.bridge` can override it.
+ *
+ * The query takes the calls of all the frames of the browser, and [JBCefClipboardBridgeRules] checks each request.
+ * The user input comes from the [JBCefOsrComponent] of the browser, or from [JBCefBrowserBase.notifyUserInput] when the
+ * owner of the browser sends the input itself and declares it with [JBCefBrowserBase.setUserInputForwarded].
+ *
+ * The script of a subframe sends a `navigator.clipboard` write only after Chromium completes the write, and sends none
+ * for a frame with an opaque origin. The script is not a check: a frame can call the query directly.
  */
 @ApiStatus.Internal
 class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowserBase) {
-  private val query: JBCefJSQuery = JBCefJSQuery.create(browser)
+  private val query: JBCefJSQuery = JBCefJSQuery.create(browser, JBCefJSQuery.FramePolicy.anyFrame())
   private val copyScript: String = buildCopyScript()
+  @Volatile
+  private var rules = JBCefClipboardBridgeRules()
+  private val forwardedInputFilter = JBCefUserInputFilter()
+  // Whether the owner of the browser declared that it passes the input that it sends to the browser.
+  @Volatile
+  private var isUserInputForwarded = false
+
+  @get:TestOnly
+  val queryFuncName: String
+    get() = query.funcName
 
   init {
-    query.addHandler(::handleQuery)
+    query.addHandler { _, frame, request -> handleQuery(frame, request) }
+    (browser.cefBrowser.uiComponent as? JBCefOsrComponent)?.setUserInputListener { rules.userInput() }
     browser.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
       override fun onLoadStart(cefBrowser: CefBrowser, frame: CefFrame, transitionType: CefRequest.TransitionType) {
         installCopyScript(frame)
@@ -65,8 +86,30 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
       frame.paste()
     }
     else {
-      frame.executeJavaScript(buildPasteScript(text, html), frame.url, 0)
+      val token = rules.startPaste(frame.identifier)
+      frame.executeJavaScript(buildPasteScript(text, html, token), frame.url, 0)
     }
+  }
+
+  /** Records that the owner of the browser passes the input that it sends, see [JBCefBrowserBase.setUserInputForwarded]. */
+  fun setUserInputForwarded() {
+    isUserInputForwarded = true
+  }
+
+  /** Takes an input event that the owner of the browser sends to the browser itself, see [JBCefBrowserBase.notifyUserInput]. */
+  fun onUserInput(event: InputEvent) {
+    if (forwardedInputFilter.isUserInput(event)) rules.userInput()
+  }
+
+  /** Forgets the keys that are down, see [JBCefBrowserBase.notifyUserInputFocusLost]. */
+  fun onUserInputFocusLost() {
+    forwardedInputFilter.reset()
+  }
+
+  /** Replaces the clock of the rules of this bridge, for a test that moves the time. */
+  @TestOnly
+  fun setClockInTests(nanoTime: () -> Long) {
+    rules = JBCefClipboardBridgeRules(nanoTime)
   }
 
   private fun installCopyScript(frame: CefFrame?) {
@@ -76,27 +119,48 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
   /** Copies the current frame selection through the script bridge. */
   fun copy(frame: CefFrame) {
     if (!frame.isValid) return
-    installCopyScript(frame)
+    prepareCopy(frame)
     frame.copy()
   }
 
   /** Cuts the current frame selection through the script bridge. */
   fun cut(frame: CefFrame) {
     if (!frame.isValid) return
-    installCopyScript(frame)
+    prepareCopy(frame)
     frame.cut()
   }
 
-  private fun handleQuery(request: String): JBCefJSQuery.Response? {
+  // The copy of the IDE carries a token in every frame, so that it needs neither the focus nor a recent input.
+  private fun prepareCopy(frame: CefFrame) {
+    val token = rules.startCopy(frame.identifier)
+    frame.executeJavaScript(copyScript + "\nwindow.__jbCefClipboardBridge.copyToken = ${jsString(token)};", frame.url, 0)
+  }
+
+  private fun handleQuery(frame: CefFrame, request: String): JBCefJSQuery.Response? {
     try {
       when {
-        request.startsWith(COPY_PREFIX) -> onCopied(request.removePrefix(COPY_PREFIX))
+        request.startsWith(COPY_PREFIX) -> {
+          // The request is "copy:<token>:<payload>". The main frame sends no token.
+          val tokenAndPayload = request.removePrefix(COPY_PREFIX)
+          val separator = tokenAndPayload.indexOf(':')
+          if (separator < 0) return REFUSED
+          if (!rules.acceptsCopy(snapshot(frame), token = tokenAndPayload.substring(0, separator))) return REFUSED
+          onCopied(tokenAndPayload.substring(separator + 1))
+        }
+        request.startsWith(PASTE_PREFIX) -> {
+          if (!rules.acceptsPaste(frame.identifier, token = request.removePrefix(PASTE_PREFIX))) return REFUSED
+          // The page wrote the data into the clipboard of Chromium. A regular paste command reads it back.
+          val focusedFrame = browser.cefBrowser.focusedFrame
+          if (focusedFrame != null && focusedFrame.identifier == frame.identifier) focusedFrame.paste()
+        }
         request.startsWith(ERROR_PREFIX) -> {
-          val message = URLDecoder.decode(request.removePrefix(ERROR_PREFIX), StandardCharsets.UTF_8)
+          val tokenAndMessage = request.removePrefix(ERROR_PREFIX)
+          val separator = tokenAndMessage.indexOf(':')
+          if (separator < 0 || !rules.acceptsPaste(frame.identifier, token = tokenAndMessage.substring(0, separator))) return REFUSED
+          val message = URLDecoder.decode(tokenAndMessage.substring(separator + 1), StandardCharsets.UTF_8)
           LOG.warn("JCEF clipboard bridge: clipboard write failed: ${message.take(512)}")
         }
-        // The page wrote the data into the clipboard of Chromium. A regular paste command reads it back.
-        request == PASTE_REQUEST -> browser.cefBrowser.focusedFrame?.paste()
+        else -> return REFUSED
       }
     }
     catch (e: Exception) {
@@ -104,6 +168,23 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
       LOG.warn("JCEF clipboard bridge: failed to handle a request", e)
     }
     return null
+  }
+
+  // In the out-of-process mode, the frame is valid only during the call, so read it here.
+  private fun snapshot(frame: CefFrame): JBCefClipboardBridgeRules.Frame {
+    val cefBrowser = browser.cefBrowser
+    return JBCefClipboardBridgeRules.Frame(
+      frameId = frame.identifier,
+      isMain = frame.isMain,
+      url = frame.url,
+      mainFrameUrl = if (frame.isMain) frame.url else cefBrowser.mainFrame?.url,
+      focusedFrameId = cefBrowser.focusedFrame?.identifier,
+      browserHasFocus = JBCefClipboardBridgeRules.isFocusIn(KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner,
+                                                            browser.component, cefBrowser.uiComponent),
+      // The user types into the component of a browser; a browser without one, such as a JBCefOsrHandlerBrowser, gets
+      // the input from its owner, when the owner declares it.
+      hasInputSource = browser.component != null || isUserInputForwarded,
+    )
   }
 
   // The payload is "<text>\n<html>", both parts encoded with encodeURIComponent.
@@ -121,7 +202,7 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
 
   @Language("JavaScript")
   private fun buildCopyScript(): String {
-    val send = query.inject("'$COPY_PREFIX' + encodeURIComponent(text) + '\\n' + encodeURIComponent(html)")
+    val send = query.inject("'$COPY_PREFIX' + token + ':' + encodeURIComponent(text) + '\\n' + encodeURIComponent(html)")
     return """
       (function() {
         if (window.__jbCefClipboardBridge) return;
@@ -130,6 +211,9 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
         function send(text, html) {
           text = text == null ? '' : String(text);
           html = html == null ? '' : String(html);
+          // The token of the copy that the IDE started in this frame, for one request, also for an empty one.
+          const token = bridge.copyToken || '';
+          bridge.copyToken = null;
           if (text === '' && html === '') return;
           $send
         }
@@ -174,24 +258,33 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
         document.addEventListener('cut', onCopyOrCut, true);
 
         // JS-initiated copies, e.g. a "copy code" button. The paste script uses the original write().
+        // A subframe sends a write only after Chromium completes it, and a subframe with an opaque origin sends none.
         const clipboard = navigator.clipboard;
+        const isSubframe = window !== window.top;
         if (clipboard) {
           const writeText = clipboard.writeText.bind(clipboard);
           bridge.write = clipboard.write.bind(clipboard);
+          const sendAfter = function(result, data) {
+            if (!isSubframe) {
+              data().then(function(d) { send(d.text, d.html); }, function() {});
+            }
+            else if (String(window.origin) !== 'null') {
+              result.then(function() { return data(); }).then(function(d) { send(d.text, d.html); }, function() {});
+            }
+            return result;
+          };
           clipboard.writeText = function(text) {
-            send(text, '');
-            return writeText(text);
+            return sendAfter(writeText(text), function() { return Promise.resolve({text: text, html: ''}); });
           };
           clipboard.write = function(items) {
-            (async function() {
+            return sendAfter(bridge.write(items), async function() {
               let text = '', html = '';
               for (const item of items) {
                 if (item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
                 if (item.types.includes('text/html')) html = await (await item.getType('text/html')).text();
               }
-              send(text, html);
-            })().catch(function() {});
-            return bridge.write(items);
+              return {text: text, html: html};
+            });
           };
         }
       })();
@@ -199,13 +292,14 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
   }
 
   @Language("JavaScript")
-  private fun buildPasteScript(text: String, html: String): String {
-    val notifyWritten = query.inject("'$PASTE_REQUEST'")
-    val notifyWriteFailed = query.inject("'$ERROR_PREFIX' + encodeURIComponent(String(error))")
+  private fun buildPasteScript(text: String, html: String, token: String): String {
+    val notifyWritten = query.inject("'$PASTE_PREFIX' + token")
+    val notifyWriteFailed = query.inject("'$ERROR_PREFIX' + token + ':' + encodeURIComponent(String(error))")
     return """
       (function() {
         const text = ${jsString(text)};
         const html = ${jsString(html)};
+        const token = ${jsString(token)};
 
         // The page gets a synthetic paste event. When the page does not handle it, the text goes in through insertText.
         function pasteSynthetic() {
@@ -219,7 +313,7 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
         }
 
         const bridge = window.__jbCefClipboardBridge;
-        const write = bridge ? bridge.write : navigator.clipboard && navigator.clipboard.write.bind(navigator.clipboard);
+        const write = bridge && bridge.write ? bridge.write : navigator.clipboard && navigator.clipboard.write.bind(navigator.clipboard);
         if (!write || !document.hasFocus()) {
           pasteSynthetic();
           return;
@@ -235,6 +329,8 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
       """.trimIndent()
   }
 }
+
+private val REFUSED = JBCefJSQuery.Response(null, JBCefJSQuery.ERR_CODE_FRAME_REFUSED, JBCefJSQuery.ERR_MSG_FRAME_REFUSED)
 
 // A double-quoted JS string literal.
 private fun jsString(s: String): String = "\"" + StringUtil.escapeStringCharacters(s) + "\""

@@ -25,6 +25,8 @@ import java.awt.Color;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.IllegalComponentStateException;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -49,6 +51,8 @@ class JBCefOsrComponent extends JPanel {
   private volatile @NotNull JBCefOsrHandler myRenderHandler;
   private volatile @NotNull CefBrowser myBrowser;
   private final @NotNull JBCefInputMethodAdapter myInputMethodAdapter = new JBCefInputMethodAdapter(this);
+  private volatile @Nullable Runnable myUserInputListener;
+  private final @NotNull JBCefUserInputFilter myUserInputFilter = new JBCefUserInputFilter();
 
   private double myScale = 1.0;
 
@@ -78,6 +82,13 @@ class JBCefOsrComponent extends JPanel {
     setFocusTraversalKeysEnabled(false);
 
     addInputMethodListener(myInputMethodAdapter);
+    addFocusListener(new FocusAdapter() {
+      @Override
+      public void focusLost(FocusEvent e) {
+        // The releases of the keys that are down now go to another component.
+        myUserInputFilter.reset();
+      }
+    });
 
     // This delay is a workaround for JBR-7335.
     // After the device configuration is changed, the browser reacts to it whether it receives a notification from the client or not.
@@ -96,6 +107,20 @@ class JBCefOsrComponent extends JPanel {
         myScaleInitialized.set(true);
       }
     });
+  }
+
+  /**
+   * Sets the listener of the user input that this component passes to the browser: a mouse press, or a press of a key
+   * that is not a modifier or Escape and does not repeat. The listener runs before the browser gets the input. Input
+   * that code sends to the browser directly does not reach the listener.
+   */
+  void setUserInputListener(@Nullable Runnable listener) {
+    myUserInputListener = listener;
+  }
+
+  private void notifyUserInput() {
+    Runnable listener = myUserInputListener;
+    if (listener != null) listener.run();
   }
 
   public void setBrowser(@NotNull CefBrowser browser) {
@@ -194,6 +219,7 @@ class JBCefOsrComponent extends JPanel {
       return;
     }
 
+    if (myUserInputFilter.isUserInput(e)) notifyUserInput();
     myBrowser.sendMouseEvent(new MouseEvent(
       e.getComponent(),
       e.getID(),
@@ -286,6 +312,7 @@ class JBCefOsrComponent extends JPanel {
   @Override
   protected void processKeyEvent(KeyEvent e) {
     super.processKeyEvent(e);
+    if (myUserInputFilter.isUserInput(e)) notifyUserInput();
     myBrowser.sendKeyEvent(e);
   }
 

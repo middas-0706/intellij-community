@@ -1,10 +1,12 @@
-// Copyright 2000-2024 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license.
+// Copyright 2000-2026 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license.
 package com.intellij.ui.jcef;
 
 import org.cef.browser.CefBrowser;
 import org.cef.handler.CefRenderHandler;
+import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.TestOnly;
 
 import javax.swing.JComponent;
 import java.awt.event.KeyEvent;
@@ -15,6 +17,7 @@ import java.awt.event.MouseWheelEvent;
  * A wrapper over {@link CefBrowser} that forwards paint requests and notifications to a custom {@link CefRenderHandler}.
  * Key and mouse events are to be sent back to the {@link CefBrowser} via the callbacks: {@link CefBrowser#sendKeyEvent(KeyEvent)},
  * {@link CefBrowser#sendMouseEvent(MouseEvent)}, {@link CefBrowser#sendMouseWheelEvent(MouseWheelEvent)}.
+ * An owner that sends the input this way calls {@link #setUserInputForwarded()} and {@link #notifyUserInput}.
  * <p></p>
  * Use {@link #loadURL(String)} or {@link #loadHTML(String)} for loading.
  * <p></p>
@@ -99,20 +102,46 @@ public abstract class JBCefOsrHandlerBrowser extends JBCefBrowserBase {
                                    @NotNull CefRenderHandler renderHandler,
                                    boolean createImmediately)
   {
-    super(JBCefBrowser.createBuilder().
-            setClient(client).
-            setUrl(url).
-            setCreateImmediately(createImmediately).
-            setOffScreenRendering(true).
-            setOSRHandlerFactory(new JBCefOSRHandlerFactory() {
-              @Override
-              public @NotNull JComponent createComponent(boolean isMouseWheelEventEnabled) {
-                return new JComponent() {};
-              }
-              @Override
-              public @NotNull CefRenderHandler createCefRenderHandler(@NotNull JComponent component) {
-                return renderHandler;
-              }
-            }));
+    super(createBuilder(client, url, renderHandler, createImmediately));
+  }
+
+  private JBCefOsrHandlerBrowser(@NotNull JBCefBrowserBuilder builder) {
+    super(builder);
+  }
+
+  /**
+   * Creates the browser with the clipboard bridge on every platform, without its native peer, for a test of the bridge
+   * in this kind of browser. The option belongs to this browser only.
+   */
+  @TestOnly
+  @ApiStatus.Internal
+  public static @NotNull JBCefOsrHandlerBrowser createWithClipboardBridgeInTests(@NotNull String url, @NotNull CefRenderHandler renderHandler) {
+    return new JBCefOsrHandlerBrowser(createBuilder(null, url, renderHandler, false).setUseClipboardBridge(true)) {
+      @Override
+      public @Nullable JComponent getComponent() {
+        return null;
+      }
+    };
+  }
+
+  private static @NotNull JBCefBrowserBuilder createBuilder(@Nullable JBCefClient client,
+                                                            @Nullable String url,
+                                                            @NotNull CefRenderHandler renderHandler,
+                                                            boolean createImmediately) {
+    return JBCefBrowser.createBuilder().
+      setClient(client).
+      setUrl(url).
+      setCreateImmediately(createImmediately).
+      setOffScreenRendering(true).
+      setOSRHandlerFactory(new JBCefOSRHandlerFactory() {
+        @Override
+        public @NotNull JComponent createComponent(boolean isMouseWheelEventEnabled) {
+          return new JComponent() {};
+        }
+        @Override
+        public @NotNull CefRenderHandler createCefRenderHandler(@NotNull JComponent component) {
+          return renderHandler;
+        }
+      });
   }
 }
