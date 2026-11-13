@@ -41,6 +41,8 @@ import javax.swing.JFrame
 import javax.swing.SwingUtilities
 
 private const val REFUSED = "fail ${JBCefJSQuery.ERR_CODE_FRAME_REFUSED}"
+// The answer of a frame that took the token of a copy of the IDE.
+private const val COPY_READY = "copy-ready:"
 
 /**
  * Tests the frame policy of [JBCefJSQuery] in real JCEF (IJPL-261493).
@@ -233,6 +235,80 @@ class JBCefJSQueryFramesJcefTest {
       flushEdt()
       copies.contains("ide-sandboxed-selection")
     }
+  }
+
+  @Test
+  fun `the copy event of each IDE copy in an iframe of another origin finds its token`() {
+    val browser = createBrowser { it.setUseClipboardBridge(true) }
+    val copies = recordIdeCopies()
+    val bridge = browser.clipboardBridge!!
+    // The page selects a new text for each copy and reports whether the token of the IDE is there at the copy event.
+    val probe = "let current = 0; window.selectText = function(i) { current = i; const text = document.getElementById('text'); " +
+                "text.textContent = 'repeated-copy-' + i; document.getSelection().selectAllChildren(text); report(NAME, 'select-' + i, 'ok'); }; " +
+                "document.addEventListener('copy', function() { const b = window.__jbCefClipboardBridge; " +
+                "report(NAME, 'event-' + current, b && b.copyToken ? 'token' : 'no token'); });"
+    val frameId = selectInFocusedIframe(browser, "repeat", probe)
+
+    // The script of the token and the copy command reach the renderer by different channels, so a single copy can pass
+    // by chance: the test repeats it.
+    for (i in 1..30) {
+      val frame = browser.cefBrowser.getFrameByIdentifier(frameId)
+      frame.executeJavaScript("selectText($i);", frame.url, 0)
+      server.awaitResults(setOf("repeat-sandboxed" to "select-$i"))
+      SwingUtilities.invokeAndWait { bridge.copy(browser.cefBrowser.getFrameByIdentifier(frameId)) }
+      assertEquals("copy $i", "token", server.awaitResults(setOf("repeat-sandboxed" to "event-$i")).values.single())
+      waitFor("copy $i in the IDE clipboard") {
+        flushEdt()
+        copies.contains("repeated-copy-$i")
+      }
+    }
+  }
+
+  @Test
+  fun `a copy of the IDE runs once for one answer of its frame, and another frame cannot answer it`() {
+    val browser = createBrowser { it.setUseClipboardBridge(true) }
+    val copies = recordIdeCopies()
+    val bridge = browser.clipboardBridge!!
+    val fn = bridge.queryFuncName
+    // The frame reports the selection and the token at each copy event, and at the first one it answers the copy again.
+    val probe = "let events = 0; document.addEventListener('copy', function() { events++; " +
+                "const token = window.__jbCefClipboardBridge.copyToken; " +
+                "report(NAME, 'event-' + events, document.getSelection().toString() + '|' + token); " +
+                "if (events === 1) window['$fn']({request: '$COPY_READY' + token, " +
+                "onSuccess: function(r) { report(NAME, 'again', 'ok'); }, onFailure: function(code, message) { report(NAME, 'again', 'fail ' + code); }}); });"
+    val frameId = selectInFocusedIframe(browser, "answer", probe)
+
+    SwingUtilities.invokeAndWait { bridge.copy(browser.cefBrowser.getFrameByIdentifier(frameId)) }
+    val token = server.awaitResults(setOf("answer-sandboxed" to "event-1")).values.single().substringAfter('|')
+    assertEquals(REFUSED, server.awaitResults(setOf("answer-sandboxed" to "again")).values.single())
+    browser.cefBrowser.executeJavaScript("window['$fn']({request: '$COPY_READY$token', onSuccess: function(r) { report('answer-main', 'again', 'ok'); }, " +
+                                         "onFailure: function(code, message) { report('answer-main', 'again', 'fail ' + code); }});",
+                                         browser.cefBrowser.url, 0)
+    assertEquals(REFUSED, server.awaitResults(setOf("answer-main" to "again")).values.single())
+    waitFor("the copy in the IDE clipboard") {
+      flushEdt()
+      copies.contains("answer-sandboxed-selection")
+    }
+
+    // The next copy of the IDE is the second copy event of the frame, so neither answer ran a command.
+    val frame = browser.cefBrowser.getFrameByIdentifier(frameId)
+    frame.executeJavaScript("(function() { const text = document.getElementById('text'); text.textContent = 'second-copy'; " +
+                            "document.getSelection().selectAllChildren(text); report(NAME, 'second', 'ok'); })();", frame.url, 0)
+    server.awaitResults(setOf("answer-sandboxed" to "second"))
+    SwingUtilities.invokeAndWait { bridge.copy(browser.cefBrowser.getFrameByIdentifier(frameId)) }
+    assertEquals("second-copy", server.awaitResults(setOf("answer-sandboxed" to "event-2")).values.single().substringBefore('|'))
+  }
+
+  @Test
+  fun `a refused answer of a frame leaves no token for the next copy of the page`() {
+    val browser = createBrowser { it.setUseClipboardBridge(true) }
+    val frameId = selectInFocusedIframe(browser, "stale", "")
+    // The frame takes the token of a copy that the IDE did not start, so the bridge refuses its answer.
+    val frame = browser.cefBrowser.getFrameByIdentifier(frameId)
+    frame.executeJavaScript("window.__jbCefClipboardBridge.takeCopyToken('stale-token'); " +
+                            "(function wait() { if (window.__jbCefClipboardBridge.copyToken == null) report(NAME, 'cleared', 'ok'); " +
+                            "else setTimeout(wait, 20); })();", frame.url, 0)
+    server.awaitResults(setOf("stale-sandboxed" to "cleared"))
   }
 
   @Test

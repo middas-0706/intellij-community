@@ -1,8 +1,11 @@
 // Copyright 2000-2026 JetBrains s.r.o. and contributors. Use of this source code is governed by the Apache 2.0 license.
 package com.intellij.ui.jcef
 
+import com.intellij.ui.jcef.JBCefClipboardBridgeRules.Command
 import com.intellij.ui.jcef.JBCefClipboardBridgeRules.Frame
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.concurrent.TimeUnit
@@ -33,6 +36,36 @@ class JBCefClipboardBridgeRulesTest {
     val late = rules.startCopy("frame")
     advance(5001)
     assertFalse(rules.acceptsCopy(frame, late))
+  }
+
+  @Test
+  fun `the answer of the frame to a copy of the IDE gives its command once, for its frame and token, within 5 seconds`() {
+    val token = rules.startCopy("frame", Command.CUT)
+    assertTrue(rules.isCopyWaitingForAnswer())
+    assertNull(rules.takeCopyReady("another-frame", token))
+    assertNull(rules.takeCopyReady("frame", "another-token"))
+    assertEquals(Command.CUT, rules.takeCopyReady("frame", token))
+    assertFalse(rules.isCopyWaitingForAnswer())
+    assertNull(rules.takeCopyReady("frame", token), "a second answer")
+    // The token stays valid for the copy request of the command.
+    assertTrue(rules.acceptsCopy(subframe("frame", "https://other.test/"), token))
+    assertNull(rules.takeCopyReady("frame", token))
+
+    val late = rules.startCopy("frame")
+    advance(5001)
+    assertNull(rules.takeCopyReady("frame", late))
+    assertFalse(rules.isCopyWaitingForAnswer())
+  }
+
+  @Test
+  fun `a copy request with a token that the bridge does not accept counts as one without a token`() {
+    val stale = rules.startCopy("frame")
+    // Another copy of the IDE replaces the one of the stale token.
+    rules.startCopy("another-frame")
+    assertTrue(rules.acceptsCopy(mainFrame(hasFocus = true), stale))
+    assertFalse(rules.acceptsCopy(subframe("frame", "https://other.test/"), stale))
+    rules.userInput()
+    assertTrue(rules.acceptsCopy(subframe("frame", "https://page.test/frame.html"), stale))
   }
 
   @Test

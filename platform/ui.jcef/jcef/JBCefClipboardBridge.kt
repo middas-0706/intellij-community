@@ -27,6 +27,7 @@ private val LOG = logger<JBCefClipboardBridge>()
 private const val COPY_PREFIX = "copy:"
 private const val ERROR_PREFIX = "error:"
 private const val PASTE_PREFIX = "paste:"
+private const val COPY_READY_PREFIX = "copy-ready:"
 
 /**
  * Routes the clipboard traffic of an off-screen browser through the IDE process.
@@ -38,6 +39,8 @@ private const val PASTE_PREFIX = "paste:"
  * the Ozone platform and desktop environment. The system property `ide.browser.jcef.linux.clipboard.bridge` can override it.
  *
  * The query takes the calls of all the frames of the browser, and [JBCefClipboardBridgeRules] checks each request.
+ * A copy or a cut of the IDE gives the frame a one-time token by a script and runs the command only after the frame
+ * answers that it took the token: the script and the command reach the renderer by different channels.
  * The user input comes from the [JBCefOsrComponent] of the browser, or from [JBCefBrowserBase.notifyUserInput] when the
  * owner of the browser sends the input itself and declares it with [JBCefBrowserBase.setUserInputForwarded].
  *
@@ -118,22 +121,37 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
 
   /** Copies the current frame selection through the script bridge. */
   fun copy(frame: CefFrame) {
-    if (!frame.isValid) return
-    prepareCopy(frame)
-    frame.copy()
+    if (frame.isValid) startCopy(frame, JBCefClipboardBridgeRules.Command.COPY)
   }
 
   /** Cuts the current frame selection through the script bridge. */
   fun cut(frame: CefFrame) {
-    if (!frame.isValid) return
-    prepareCopy(frame)
-    frame.cut()
+    if (frame.isValid) startCopy(frame, JBCefClipboardBridgeRules.Command.CUT)
   }
 
   // The copy of the IDE carries a token in every frame, so that it needs neither the focus nor a recent input.
-  private fun prepareCopy(frame: CefFrame) {
-    val token = rules.startCopy(frame.identifier)
-    frame.executeJavaScript(copyScript + "\nwindow.__jbCefClipboardBridge.copyToken = ${jsString(token)};", frame.url, 0)
+  // The script and the command reach the renderer by different channels, so the frame first takes the token and
+  // answers, and only then the bridge runs the command, whose copy event finds the token.
+  private fun startCopy(frame: CefFrame, command: JBCefClipboardBridgeRules.Command) {
+    if (rules.isCopyWaitingForAnswer()) {
+      LOG.debug("JCEF clipboard bridge: a new copy replaces a copy whose frame did not answer")
+    }
+    val token = rules.startCopy(frame.identifier, command)
+    frame.executeJavaScript(copyScript + "\nwindow.__jbCefClipboardBridge.takeCopyToken(${jsString(token)});", frame.url, 0)
+  }
+
+  // The frame took the token of the copy that the IDE started in it: run the command now. In the out-of-process mode
+  // the frame object of the call does not run a command, so the handler takes the frame from the browser by its
+  // identifier, as a paste takes the focused frame.
+  private fun onCopyReady(frame: CefFrame, token: String): Boolean {
+    val command = rules.takeCopyReady(frame.identifier, token)
+    if (command == null) {
+      LOG.debug("JCEF clipboard bridge: refused the answer of a frame to a copy that it did not start or that expired")
+      return false
+    }
+    val target = browser.cefBrowser.getFrameByIdentifier(frame.identifier) ?: return false
+    if (command == JBCefClipboardBridgeRules.Command.CUT) target.cut() else target.copy()
+    return true
   }
 
   private fun handleQuery(frame: CefFrame, request: String): JBCefJSQuery.Response? {
@@ -146,6 +164,9 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
           if (separator < 0) return REFUSED
           if (!rules.acceptsCopy(snapshot(frame), token = tokenAndPayload.substring(0, separator))) return REFUSED
           onCopied(tokenAndPayload.substring(separator + 1))
+        }
+        request.startsWith(COPY_READY_PREFIX) -> {
+          if (!onCopyReady(frame, token = request.removePrefix(COPY_READY_PREFIX))) return REFUSED
         }
         request.startsWith(PASTE_PREFIX) -> {
           if (!rules.acceptsPaste(frame.identifier, token = request.removePrefix(PASTE_PREFIX))) return REFUSED
@@ -203,10 +224,19 @@ class JBCefClipboardBridge internal constructor(private val browser: JBCefBrowse
   @Language("JavaScript")
   private fun buildCopyScript(): String {
     val send = query.inject("'$COPY_PREFIX' + token + ':' + encodeURIComponent(text) + '\\n' + encodeURIComponent(html)")
+    // A refused answer leaves no token behind for the next copy of the page.
+    val copyReady = query.inject("'$COPY_READY_PREFIX' + token", "function(response) {}",
+                                 "function(code, message) { if (bridge.copyToken === token) bridge.copyToken = null; }")
     return """
       (function() {
         if (window.__jbCefClipboardBridge) return;
         const bridge = window.__jbCefClipboardBridge = {};
+
+        // The IDE runs its copy or cut after this answer, so that the copy event finds the token.
+        bridge.takeCopyToken = function(token) {
+          bridge.copyToken = token;
+          $copyReady
+        };
 
         function send(text, html) {
           text = text == null ? '' : String(text);

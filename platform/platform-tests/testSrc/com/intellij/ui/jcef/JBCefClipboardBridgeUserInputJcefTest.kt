@@ -11,6 +11,7 @@ import org.intellij.lang.annotations.Language
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.ClassRule
 import org.junit.Rule
@@ -36,7 +37,9 @@ private val REFUSED = "fail ${JBCefJSQuery.ERR_CODE_FRAME_REFUSED}"
  * In a test run, Chromium does not take the mouse events that the test sends, neither from the component of the browser
  * nor from DevTools. So a click of the test has three parts: the mouse press and the release that the component gets,
  * as the IDE passes them to the browser; a user gesture of DevTools in the main frame, which Chromium also gives to the
- * frames of the origin of the page; and the focus, which a script of the main frame moves into the clicked frame.
+ * frames of the origin of the page; and the focus, which a script of the main frame moves into the clicked frame. The
+ * mouse press can take the focus of Chromium from the browser in a window of the test that stays inactive, so the test
+ * gives it back, and a `navigator.clipboard` write waits for the focus of its document, which Chromium requires.
  *
  * The test runs only with `-Dintellij.test.standalone=true`, `-Djava.awt.headless=false` and native JCEF.
  */
@@ -77,9 +80,7 @@ class JBCefClipboardBridgeUserInputJcefTest {
   @Test
   fun `a navigator clipboard write of an iframe of the page origin reaches the IDE clipboard after a click into it`() {
     click("same")
-    run("same", "navigator.clipboard.writeText('same-origin-write').then(function() { report(NAME, 'write', 'resolved'); }, " +
-                "function() { report(NAME, 'write', 'rejected'); });")
-    assertEquals("resolved", server.awaitResults(setOf("input-same" to "write")).values.single())
+    assertEquals("resolved", navigatorWrite("same", "same-origin-write"))
     waitForCopy("same-origin-write")
   }
 
@@ -119,9 +120,9 @@ class JBCefClipboardBridgeUserInputJcefTest {
   @Test
   fun `the script of an iframe sends a write only after Chromium completes it`() {
     click("denied")
-    run("denied", "navigator.clipboard.writeText('denied-write').then(function() { report(NAME, 'write', 'resolved'); }, " +
-                  "function() { report(NAME, 'write', 'rejected'); });")
-    assertEquals("rejected", server.awaitResults(setOf("input-denied" to "write")).values.single())
+    // Chromium refuses the write for the permission of the iframe, not for the focus of its document.
+    val result = navigatorWrite("denied", "denied-write")
+    assertTrue(result, result.startsWith("rejected NotAllowedError") && !result.contains("not focused"))
     // The click can still give one write, because the rejected write sent no request.
     assertEquals("ok", copyRequest("denied", "after-rejected-write"))
     waitForCopy("after-rejected-write")
@@ -181,6 +182,12 @@ class JBCefClipboardBridgeUserInputJcefTest {
         component.dispatchEvent(MouseEvent(component, id, System.currentTimeMillis(), modifiers, 10, 10, 1, false, MouseEvent.BUTTON1))
       }
     }
+    // The mouse press moves the focus of AWT, and in a window of the test that stays inactive the browser can lose the
+    // focus of Chromium with it: give the browser the focus again, as an active window gives it.
+    SwingUtilities.invokeAndWait {
+      UIUtil.dispatchAllInvocationEvents()
+      browser.cefBrowser.setFocus(true)
+    }
     browser.cefBrowser.devToolsClient
       .executeDevToolsMethod("Runtime.evaluate", "{\"expression\": \"0\", \"userGesture\": true}")
       .get(10, TimeUnit.SECONDS)
@@ -191,6 +198,16 @@ class JBCefClipboardBridgeUserInputJcefTest {
     else {
       focus(frameName)
     }
+  }
+
+  // Writes the text with the clipboard API of the iframe once its document has the focus, which Chromium requires, and
+  // returns the result: "resolved", or "rejected" with the name and the message of the error.
+  private fun navigatorWrite(frameName: String, text: String): String {
+    run(frameName, "(function write(deadline) { " +
+                   "if (!document.hasFocus() && Date.now() < deadline) { setTimeout(function() { write(deadline); }, 20); return; } " +
+                   "navigator.clipboard.writeText('$text').then(function() { report(NAME, 'write', 'resolved'); }, " +
+                   "function(e) { report(NAME, 'write', 'rejected ' + e.name + ': ' + e.message); }); })(Date.now() + 3000);")
+    return server.awaitResults(setOf("input-$frameName" to "write")).values.single()
   }
 
   // Moves the focus into the iframe with a script of the main frame.

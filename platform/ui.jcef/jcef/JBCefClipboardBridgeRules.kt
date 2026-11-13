@@ -19,7 +19,9 @@ private const val NO_USER_INPUT = Long.MIN_VALUE
 /**
  * Decides which requests of the frames of a browser the [JBCefClipboardBridge] accepts.
  *
- * - A copy with the one-time token of a copy or a cut that the IDE runs in a frame: once, within 5 seconds.
+ * - A copy with the one-time token of a copy or a cut that the IDE runs in a frame: once, within 5 seconds. The frame
+ *   first answers that it took the token, and the IDE runs its command once for that answer. A request with a token
+ *   that the bridge does not accept counts as a request without a token.
  * - A copy of the main frame without a token: when the browser has the focus, or within 5 seconds after a user input.
  *   A browser without a source of user input, which has no component and whose owner does not declare that it passes
  *   the input, takes it at any time.
@@ -73,17 +75,37 @@ class JBCefClipboardBridgeRules(private val nanoTime: () -> Long = System::nanoT
     userInputTime.set(nanoTime())
   }
 
+  /** A clipboard command that the IDE runs in a frame. */
+  enum class Command { COPY, CUT }
+
   /** Returns the one-time token of a copy or a cut that the IDE runs in the frame. */
-  fun startCopy(frameId: String): String = newToken(copyPermit, frameId)
+  fun startCopy(frameId: String, command: Command = Command.COPY): String = newToken(copyPermit, frameId, command)
 
   /** Returns the one-time token of a paste that the IDE runs in the frame. */
   fun startPaste(frameId: String): String = newToken(pastePermit, frameId)
 
   /**
+   * Returns the command of the copy or the cut that the IDE started in the frame with the token, once, when the frame
+   * answers that it took the token. The token stays valid for the copy request of the command.
+   */
+  fun takeCopyReady(frameId: String, token: String): Command? {
+    val permit = copyPermit.get() ?: return null
+    if (permit.answered || permit.frameId != frameId || permit.token != token || nanoTime() - permit.deadline > 0) return null
+    return if (copyPermit.compareAndSet(permit, permit.answer())) permit.command else null
+  }
+
+  /** Returns whether a copy or a cut that the IDE started still waits for the answer of its frame. */
+  fun isCopyWaitingForAnswer(): Boolean {
+    val permit = copyPermit.get() ?: return false
+    return !permit.answered && nanoTime() - permit.deadline <= 0
+  }
+
+  /**
    * Returns whether the bridge accepts a copy request of the frame with the token. An empty token means no token.
    */
   fun acceptsCopy(frame: Frame, token: String): Boolean {
-    if (token.isNotEmpty()) return consume(copyPermit, frame.frameId, token)
+    // A token that the frame keeps after its copy expired or was replaced does not refuse a copy that the rules allow.
+    if (token.isNotEmpty() && consume(copyPermit, frame.frameId, token)) return true
     if (frame.isMain) {
       return !frame.hasInputSource || frame.browserHasFocus || isWithinUserInputWindow(userInputTime.get(), MAIN_FRAME_INPUT_WINDOW_NANOS)
     }
@@ -101,9 +123,9 @@ class JBCefClipboardBridgeRules(private val nanoTime: () -> Long = System::nanoT
 
   private fun isWithinUserInputWindow(time: Long, window: Long): Boolean = time != NO_USER_INPUT && nanoTime() - time <= window
 
-  private fun newToken(permits: AtomicReference<Permit?>, frameId: String): String {
+  private fun newToken(permits: AtomicReference<Permit?>, frameId: String, command: Command? = null): String {
     val token = UUID.randomUUID().toString()
-    permits.set(Permit(frameId, token, nanoTime() + PERMIT_TIMEOUT_NANOS))
+    permits.set(Permit(frameId, token, nanoTime() + PERMIT_TIMEOUT_NANOS, command))
     return token
   }
 
@@ -113,7 +135,9 @@ class JBCefClipboardBridgeRules(private val nanoTime: () -> Long = System::nanoT
     return permits.compareAndSet(permit, null)
   }
 
-  private class Permit(val frameId: String, val token: String, val deadline: Long)
+  private class Permit(val frameId: String, val token: String, val deadline: Long, val command: Command?, val answered: Boolean = false) {
+    fun answer(): Permit = Permit(frameId, token, deadline, command, answered = true)
+  }
 
   companion object {
     /**
