@@ -1273,15 +1273,11 @@ open class JBTabsImpl internal constructor(
                 return
               }
 
-              var clickToUnpin = false
-
               if (tabInfo.isPinned && tabAction != null) {
                 val component = tabInfo.tabLabel!!
                 ActionManager.getInstance().tryToExecute(tabAction, e, component, tabInfo.tabActionPlace, true)
-                clickToUnpin = true
               }
-
-              if (!clickToUnpin) {
+              else {
                 removeTab(tabInfo)
               }
               e.consume()
