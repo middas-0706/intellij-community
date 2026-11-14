@@ -1325,7 +1325,7 @@ open class JBTabsImpl internal constructor(
 
   @Internal
   protected fun executeTabAction(tabInfo: TabInfo, tabAction: AnAction, e: MouseEvent) {
-    val component = tabInfo.tabLabel!!
+    val component = tabInfo.tabLabel ?: return
     ActionManager.getInstance().tryToExecute(tabAction, e, component, tabInfo.tabActionPlace, true)
   }
 
