@@ -1273,13 +1273,7 @@ open class JBTabsImpl internal constructor(
                 return
               }
 
-              if (tabInfo.isPinned && tabAction != null) {
-                val component = tabInfo.tabLabel!!
-                ActionManager.getInstance().tryToExecute(tabAction, e, component, tabInfo.tabActionPlace, true)
-              }
-              else {
-                removeTab(tabInfo)
-              }
+              performTabActionInHiddenTabsList(tabInfo, tabAction, e)
               e.consume()
               val indexToSelect = min(clickedIndex, list.model.size)
               ClientProperty.put(this@JBTabsImpl, HIDDEN_INFOS_SELECT_INDEX_KEY, indexToSelect)
@@ -1317,6 +1311,22 @@ open class JBTabsImpl internal constructor(
     })
     popup.show(RelativePoint(this, Point(rect.x, rect.y + rect.height)))
     return popup
+  }
+
+  @Internal
+  protected open fun performTabActionInHiddenTabsList(tabInfo: TabInfo, tabAction: AnAction?, e: MouseEvent) {
+    if (tabInfo.isPinned && tabAction != null) {
+      executeTabAction(tabInfo, tabAction, e)
+    }
+    else {
+      removeTab(tabInfo)
+    }
+  }
+
+  @Internal
+  protected fun executeTabAction(tabInfo: TabInfo, tabAction: AnAction, e: MouseEvent) {
+    val component = tabInfo.tabLabel!!
+    ActionManager.getInstance().tryToExecute(tabAction, e, component, tabInfo.tabActionPlace, true)
   }
 
   // returns the icon that will be used in the hidden tabs list
