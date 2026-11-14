@@ -802,6 +802,15 @@ open class EditorTabs(
     return closeTabAction?.getIcon(isHovered)
   }
 
+  override fun performTabActionInHiddenTabsList(tabInfo: TabInfo, tabAction: AnAction?, e: MouseEvent) {
+    if (tabAction is CloseTab) {
+      executeTabAction(tabInfo, tabAction, e)
+    }
+    else {
+      super.performTabActionInHiddenTabsList(tabInfo, tabAction, e)
+    }
+  }
+
   override fun createTabPainterAdapter(): TabPainterAdapter = InternalUICustomization.getInstance()?.editorTabPainterAdapter ?: EditorTabPainterAdapter()
 
   override fun createTabBorder(): JBTabsBorder = JBEditorTabsBorder(this)

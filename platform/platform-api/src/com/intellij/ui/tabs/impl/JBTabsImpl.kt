@@ -1280,7 +1280,7 @@ open class JBTabsImpl internal constructor(
               // do not select the current tab because we already handled other action: close or unpin
               step.selectTab = false
               val curPopup = PopupUtil.getPopupContainerFor(list)
-              if (curPopup != null) {
+              if (curPopup != null && !curPopup.isDisposed) {
                 val button = PopupUtil.getPopupToggleComponent(curPopup)
                 curPopup.cancel()
                 if (list.model.size > 0) {
